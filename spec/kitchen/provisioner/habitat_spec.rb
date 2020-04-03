@@ -14,11 +14,7 @@ def wrap_command(code, left_pad_length = 10)
   left_padded_code = code.map do |line|
     line.rjust(line.length + left_pad_length)
   end.join("\n")
-  command = "sh -c '\n"
-  command << "TEST_KITCHEN=\"1\"; export TEST_KITCHEN\n"
-  command << "CI=\"true\"; export CI\n" if ENV["CI"]
-  command << "#{left_padded_code}\n"
-  command << "'"
+  command = "#{left_padded_code}\n"
   command
 end
 
@@ -60,87 +56,73 @@ describe Kitchen::Provisioner::Habitat do
     expect(provisioner.diagnose_plugin[:api_version]).to eq(2)
   end
 
-  describe "#install_command" do
+  describe "#windows_install_cmd" do
     it "generates a valid install script" do
-      install_command = provisioner.send(
-        :install_command
+      config[:hab_channel] = "stable"
+      config[:hab_version] = "1.5.29"
+      windows_install_cmd = provisioner.send(
+        :windows_install_cmd
       )
       expected_code = [
-        "",
-        "",
+        "if ((Get-Command hab -ErrorAction Ignore).Path) {",
+        "  Write-Output \"Habitat CLI already installed.\"",
+        "} else {",
+        "  Set-ExecutionPolicy Bypass -Scope Process -Force",
+        "  $InstallScript = ((New-Object System.Net.WebClient).DownloadString('https://raw.githubusercontent.com/habitat-sh/habitat/master/components/hab/install.ps1'))",
+        "  Invoke-Command -ScriptBlock ([scriptblock]::Create($InstallScript)) -ArgumentList stable, 1.5.29",
+        "}",
+      ]
+      expect(windows_install_cmd).to eq(wrap_command(expected_code, 8))
+    end
+  end
+
+  describe "#linux_install_cmd" do
+    it "generates a valid install script" do
+      config[:hab_version] = "1.5.29"
+      linux_install_cmd = provisioner.send(
+        :linux_install_cmd
+      )
+      expected_code = [
         "if command -v hab >/dev/null 2>&1",
         "then",
         "  echo \"Habitat CLI already installed.\"",
         "else",
         "  curl -o /tmp/install.sh 'https://raw.githubusercontent.com/habitat-sh/habitat/master/components/hab/install.sh'",
-        "  sudo -E bash /tmp/install.sh",
+        "  sudo -E bash /tmp/install.sh -v 1.5.29",
         "fi",
       ]
-      expect(install_command).to eq(wrap_command(expected_code, 8))
-    end
-
-    it "generates a valid install script with accepted license" do
-      config[:hab_license] = "accept"
-      install_command = provisioner.send(
-        :install_command
-      )
-      expected_code = [
-        "",
-        "export HAB_LICENSE=accept",
-        "if command -v hab >/dev/null 2>&1",
-        "then",
-        "  echo \"Habitat CLI already installed.\"",
-        "else",
-        "  curl -o /tmp/install.sh 'https://raw.githubusercontent.com/habitat-sh/habitat/master/components/hab/install.sh'",
-        "  sudo -E bash /tmp/install.sh",
-        "fi",
-      ]
-      expect(install_command).to eq(wrap_command(expected_code, 8))
-    end
-  end
-  describe "#init_command" do
-    it "generates a valid initialization script" do
-      install_command = provisioner.send(
-        :init_command
-      )
-      expected_code = [
-        "id -u hab >/dev/null 2>&1 || sudo -E useradd hab >/dev/null 2>&1",
-        "rm -rf /tmp/kitchen",
-        "mkdir -p /tmp/kitchen/results",
-        "mkdir -p /tmp/kitchen/config",
-      ]
-      expect(install_command).to eq(wrap_command(expected_code))
-    end
-
-    it "removes the config creation line when an override is present" do
-      config[:override_package_config] = true
-      install_command = provisioner.send(
-        :init_command
-      )
-      expected_code = [
-        "id -u hab >/dev/null 2>&1 || sudo -E useradd hab >/dev/null 2>&1",
-        "rm -rf /tmp/kitchen",
-        "mkdir -p /tmp/kitchen/results",
-        "",
-      ]
-      expect(install_command).to eq(wrap_command(expected_code))
+      expect(linux_install_cmd).to eq(wrap_command(expected_code, 8))
     end
   end
 
-  describe "#export_hab_bldr_url" do
-    it "sets the HAB_BLDR_URL env var when config[:depot_url] is set" do
-      config[:depot_url] = "https://bldr.cthulhu.com"
-      bldr_export = provisioner.send(
-        :export_hab_bldr_url
+  describe "#windows_install_service" do
+    it "generates a valid service install script" do
+      config[:channel] = "stable"
+      windows_install_service = provisioner.send(
+        :windows_install_service
       )
-      expect(bldr_export).to eq("export HAB_BLDR_URL=https://bldr.cthulhu.com")
-    end
-
-    it "should return nil if config[:depot_url] is not set" do
-      bldr_export = provisioner.send(
-        :export_hab_bldr_url
-      )
-      expect(bldr_export).to eq(nil)
+      expected_code = [
+        "New-Item -Path C:\\Windows\\Temp\\kitchen -ItemType Directory -Force | Out-Null",
+        "New-Item -Path C:\\Windows\\Temp\\kitchen\\config -ItemType Directory -Force | Out-Null",
+        "if (!($env:Path | Select-String \"Habitat\")) {",
+        "  $env:Path += \";C:\\ProgramData\\Habitat\"",
+        "}",
+        "if (!(Get-Service -Name Habitat -ErrorAction Ignore)) {",
+        "  hab license accept",
+        "  Write-Output \"Installing Habitat Windows Service\"",
+        "  hab pkg install core/windows-service",
+        "  if ($(Get-Service -Name Habitat).Status -ne \"Stopped\") {",
+        "    Stop-Service -Name Habitat",
+        "  }",
+        "  $HabSvcConfig = \"c:\\hab\\svc\\windows-service\\HabService.dll.config\"",
+        "  [xml]$xmlDoc = Get-Content $HabSvcConfig",
+        "  $obj = $xmlDoc.configuration.appSettings.add | where {$_.Key -eq \"launcherArgs\" }",
+        "  $obj.value = \"--no-color --channel stable\"",
+        "  $xmlDoc.Save($HabSvcConfig)",
+        "  Start-Service -Name Habitat",
+        "}",
+      ]
+      expect(windows_install_service).to eq(wrap_command(expected_code, 8))
     end
   end
 

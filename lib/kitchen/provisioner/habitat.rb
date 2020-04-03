@@ -52,6 +52,14 @@ module Kitchen
       default_config :user_toml_name, "user.toml"
       default_config :override_package_config, false
 
+      # event stream options
+      default_config :event_stream_application, nil
+      default_config :event_stream_environment, nil
+      default_config :event_stream_site, nil
+      default_config :event_stream_url, nil
+      default_config :event_stream_token, nil
+      
+
       def finalize_config!(instance)
         # Check to see if a package ident was specified for package name and be helpful
         unless config[:package_name].nil? || (config[:package_name] =~ %r{/}).nil?
@@ -123,6 +131,7 @@ module Kitchen
         if config[:install_latest_artifact] || !config[:artifact_name].nil?
           target_pkg = get_artifact_name
           target_ident = "#{config[:package_origin]}/#{config[:package_name]}"
+          target_pkg = target_pkg.gsub("results/", '') unless File.exists?(target_pkg)
         else
           target_pkg = package_ident
           target_ident = package_ident
@@ -177,7 +186,6 @@ module Kitchen
 
       def linux_install_cmd
         version = " -v #{config[:hab_version]}" unless config[:hab_version].eql?("latest")
-        puts version
         <<-BASH
         if command -v hab >/dev/null 2>&1
         then
@@ -190,7 +198,6 @@ module Kitchen
       end
 
       def windows_install_service
-        # TODO: Add ability to create C:/hab/svc/windows-service/HabService.dll.config
         <<-PWSH
         New-Item -Path C:\\Windows\\Temp\\kitchen -ItemType Directory -Force | Out-Null
         #{"New-Item -Path C:\\Windows\\Temp\\kitchen\\config -ItemType Directory -Force | Out-Null" unless config[:override_package_config]}
@@ -204,20 +211,12 @@ module Kitchen
           if ($(Get-Service -Name Habitat).Status -ne "Stopped") {
             Stop-Service -Name Habitat
           }
-          $ServiceConfig = @"
-<?xml version="1.0" encoding="utf-8"?>
-<configuration>
-  <appSettings>
-    <add key="debug" value="false" />
-    <add key="HAB_FEAT_IGNORE_SIGNALS" value="true" />
-    <add key="HAB_FEAT_INSTALL_HOOK" value="true" />
-    <add key="launcherArgs" value="--no-color #{supervisor_options}" />
-  </appSettings>
-</configuration>
-"@
-          $ServiceConfig | Out-File -encoding utf8 -FilePath C:/hab/svc/windows-service/HabService.dll.config
+          $HabSvcConfig = "c:\\hab\\svc\\windows-service\\HabService.dll.config"
+          [xml]$xmlDoc = Get-Content $HabSvcConfig
+          $obj = $xmlDoc.configuration.appSettings.add | where {$_.Key -eq "launcherArgs" }
+          $obj.value = "--no-color#{supervisor_options}"
+          $xmlDoc.Save($HabSvcConfig)
           Start-Service -Name Habitat
-          Start-Sleep 10
         }
         PWSH
       end
@@ -402,6 +401,11 @@ module Kitchen
         options += " --topology #{config[:service_topology]}" unless config[:service_topology].nil?
         options += " --strategy #{config[:service_update_strategy]}" unless config[:service_update_strategy].nil?
         options += " --channel #{config[:channel]}" unless config[:channel].nil?
+        options += " --event-stream-application #{config[:event_stream_application]}" unless config[:event_stream_application].nil?
+        options += " --event-stream-environment #{config[:event_stream_environment]}" unless config[:event_stream_environment].nil?
+        options += " --event-stream-site #{config[:event_stream_site]}" unless config[:event_stream_site].nil?
+        options += " --event-stream-url #{config[:event_stream_url]}" unless config[:event_stream_url].nil?
+        options += " --event-stream-token #{config[:event_stream_token]}" unless config[:event_stream_token].nil?
 
         options
       end
